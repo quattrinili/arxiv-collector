@@ -68,6 +68,70 @@ def expect_re(seen, pattern, deps_file, error_msg=None):
 
 strip_comment = partial(re.compile(r"(^|[^\\])%.*").sub, r"\1%")
 
+def remove_content_between_command(line_to_parse, num_open_brackets=0, command="\invis"):
+    """Remove all content between command, e.g., \invis{}.
+    
+    Parameters
+    ----------
+    line_to_parse: str
+        Line from the LaTeX text to parse.
+    num_open_brackets : int
+        Number of open brackets within the specified command.
+    command : str
+        Specific LaTeX macro for which the content should be removed.
+
+    Returns
+    -------
+    current_string : str
+        The string out of the macros.
+    num_open_brackets: int
+        Number of open brackets within the specified command.
+    """
+    current_string = '' # string to return that is not within the LaTeX command.
+    first_iteration = True
+    while True: # do-while.
+        if num_open_brackets == 0:
+            # Find if command is within the string.
+            if first_iteration:
+                current_string = line_to_parse
+                first_iteration = False
+            current_string_split = current_string.split(command, 1)
+            if len(current_string_split) == 1:
+                # The command was not found, thus can exit.
+                break
+            else:
+                # Command found,
+                current_string = current_string_split[0].ljust(len(current_string_split[0])+1)
+                line_to_parse = current_string_split[1]
+        else:
+            # The command was found in a previous line and the matching bracket is not found yet.
+            if first_iteration:
+                first_iteration = False
+            else:
+                break
+
+        for i, c in enumerate(line_to_parse):
+            # Find the corresponding closing bracket.
+            if '{' == c:
+                num_open_brackets += 1
+            elif '}' == c:
+                num_open_brackets -= 1
+            if num_open_brackets == 0:
+                # Ignore newline if no other actual character.
+                pos_char = -1
+                for j in range(i+1, len(line_to_parse)):
+                    if line_to_parse[j] == '\n':
+                        break
+                    elif not line_to_parse[j].isspace():
+                        pos_char = j
+                        break
+                if pos_char != -1:
+                    current_string += " " + line_to_parse[pos_char:]
+                break
+
+    return current_string, num_open_brackets
+
+
 ################################################################################
 # Utilities to check and download latexmk
 
@@ -258,8 +322,19 @@ def collect(
             elif dep.endswith(".tex") and strip_comments:
                 with io.open(dep) as f, io.BytesIO() as g:
                     tarinfo = tarfile.TarInfo(name=dep)
+                    document_begin = False # Flag to identify when \begin{document}
+                    num_open_brackets = 0 # Number of open bracket to identify the bracket of the LaTeX command to remove.
                     for line in f:
-                        g.write(strip_comment(line).encode("utf-8"))
+                        line_wo_comment = strip_comment(line)
+                        if document_begin:
+                            # Remove content between command invis only in the document.
+                            line, num_open_brackets = remove_content_between_command(line_wo_comment, num_open_brackets)
+                        else:
+                            line = line_wo_comment
+                            if "begin{document}" in line:
+                                document_begin = True
+                        if line:
+                            g.write(line.encode("utf-8"))
                     tarinfo.size = g.tell()
                     g.seek(0)
                     out_tar.addfile(tarinfo=tarinfo, fileobj=g)
